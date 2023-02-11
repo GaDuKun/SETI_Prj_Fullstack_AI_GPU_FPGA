@@ -16,6 +16,95 @@ from tensorflow.keras.layers import Input, Dense, Activation, Flatten, BatchNorm
 from tensorflow.keras.layers import Conv2D, AveragePooling2D, MaxPooling2D
 from tensorflow.keras.regularizers import l2
 
+#from quantize import Quantization, Dequantization   
+
+# initial value
+N_QuantBits = 1
+
+@tf.custom_gradient
+def my_sign(W):
+  # Forward computation
+  f = tf.math.sign(W)
+  # Backward computation
+  def grad(dy):
+    return dy
+  return f, grad
+
+# Custom gradient for activation
+@tf.custom_gradient
+def quant_actThresh(x):
+    threshold = tf.reduce_mean(x)
+    y = tf.cast((tf.where(x > threshold, 1, -1)), dtype=tf.float32)
+    def grad(dy):
+        return dy    #tf.math.sign(x-threshold)
+    return y, grad
+
+
+# Custom convolution layer
+class quant_conv2D(tf.keras.layers.Layer):
+  def __init__(self, filters, filter_size):
+    super(quant_conv2D, self).__init__()
+    self.num_filters=filters
+    self.filter_size=filter_size
+
+  def build(self, input_shape):
+    self.kernel=self.add_weight("kernel",shape=[self.filter_size,self.filter_size,input_shape[3],self.num_filters])   #W_t
+    self.scales=self.add_weight("scales",shape=[1,1,1,self.num_filters])         #why need it???                                     #A
+
+  def call(self, input):
+    # much more efficient! 3x speed gain, and bigger networks can be trained because there was a memory limitation
+    #return tf.nn.conv2d(my_sign(input), tf.math.multiply(self.scales, my_sign(self.kernel)), [1,1,1,1], padding='SAME')
+    return tf.nn.conv2d(input, tf.math.multiply(self.scales, my_sign(self.kernel)), [1,1,1,1], padding='SAME')
+    # return convmin(input,self.kernel, self.scales)
+
+# Custom BatchNormalization
+# TODO
+# class quant_batchNormalization(tf.keras.layers.Layer):
+#     def __init__(self):
+#         super(quant_batchNormalization,self).__init__()
+        #TODO
+
+# Custom activation RELU
+#TODO
+class quant_activation(tf.keras.layers.Layer):
+    def __init__(self):
+        super(quant_activation,self).__init__()
+    def call(self, input):
+        return quant_actThresh(input)
+
+# Custom AveragePooling
+# TODO
+# class quant_averagePooling(tf.keras.layers.Layer)
+#     def __init__(self):
+#         super(quant_averagePooling,self).__init__()
+        #TODO
+
+# Custom Dense
+# TODO
+class quant_dense(tf.keras.layers.Layer):
+    def __init__(self,units):
+        super(quant_dense,self).__init__()
+        self.units = units
+        self.activation = None   # Split dense and activation 
+        self.use_bias = True
+    def build(self, input_shape):
+        # Add weights
+        self.kernel = self.add_weight(name = 'kernel',
+                                      shape = [input_shape[-1],self.units],
+                                      initializer = 'random_normal',
+                                      trainable = True)
+        self.bias = self.add_weight(name = 'bias',
+                                    shape = ,
+                                    kernel_initializer = 'random_normal',
+                                    trainable = True)
+    def call(self,inputs):
+        #return tf.matmul(my_sign(inputs), my_sign(self.kernel))
+        # return tf.matmul(inputs, my_sign(self.kernel))
+        return tf.matmul(inputs, my_sign(self.kernel) + self.bias)
+        #return tf.matmul(inputs, my_sign(self.kernel)) + my_sign(self.bias)
+        #return tf.keras.layers.Dense(input, tf.math.multiply(self.scales, my_sign(self.kernel)), [1,1,1,1], padding='SAME')
+
+
 #get model
 def get_model_name():
     if os.path.exists("trained_models/trainedResnet.h5"):
@@ -29,6 +118,14 @@ def get_quant_model_name():
     else:
         return "pretrainedResnet"
 
+# Quantization fucntion
+# def quantize(input_data, bits):
+#     max_value = 2**bits - 1
+#     scale = max_value / float(input_data.max())
+#     quantized_data = (input_data * scale).round().astype(int)
+#     return quantized_data
+
+
 #define model
 def resnet_v1_eembc():
     # Resnet parameters
@@ -38,150 +135,153 @@ def resnet_v1_eembc():
 
     # Input layer, change kernel size to 7x7 and strides to 2 for an official resnet
     inputs = Input(shape=input_shape)
-    x = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=1,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(inputs)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
+    # Insert quantization for inputs and weights
+    #TODO
+    #Quantization_t = Quantization(num_bits=N_QuantBits)
+    # [scale_in,x] = Quantization_t.call(inputs)
+    #x = Quantization_t.call(inputs)
+    x = quant_conv2D(num_filters,3)(inputs)
+    # x = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=1,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x) #inputs
+
+    #x = BatchNormalization()(x)
+
+    # Insert quantization for Inputs
+    #TODO
+    #x = Activation('relu')(x)
+    x = quant_activation()(x)
     #x = MaxPooling2D(pool_size=(2, 2))(x) # uncomment this for official resnet model
 
 
     # First stack
 
     # Weight layers
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=1,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(x)
-    y = BatchNormalization()(y)
-    y = Activation('relu')(y)
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=1,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(y)
-    y = BatchNormalization()(y)
+    y = quant_conv2D(num_filters,3)(x)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=1,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x)
+    #y = BatchNormalization()(y)
+    #y = Activation('relu')(y)
+    y = quant_activation()(y)
+    y = quant_conv2D(num_filters,3)(y)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=1,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(y)
+    #y = BatchNormalization()(y)
 
     # Overall residual, connect weight layer and identity paths
     x = tf.keras.layers.add([x, y])
-    x = Activation('relu')(x)
+    #x = Activation('relu')(x)
+    x = quant_activation()(x)
 
 
     # Second stack
 
     # Weight layers
     num_filters = 32 # Filters need to be double for each stack
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=2,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(x)
-    y = BatchNormalization()(y)
-    y = Activation('relu')(y)
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=1,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(y)
-    y = BatchNormalization()(y)
+    y = quant_conv2D(num_filters,3)(x)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=2,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x)
+    #y = BatchNormalization()(y)
+    #y = Activation('relu')(y)
+    y = quant_activation()(y)
+    y = quant_conv2D(num_filters,3)(y)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=1,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(y)
+
+    #y = BatchNormalization()(y)
 
     # Adjust for change in dimension due to stride in identity
-    x = Conv2D(num_filters,
-                  kernel_size=1,
-                  strides=2,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(x)
+    x = quant_conv2D(num_filters,1)(x)
+    # x = Conv2D(num_filters,
+    #               kernel_size=1,
+    #               strides=2,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x)
 
     # Overall residual, connect weight layer and identity paths
     x = tf.keras.layers.add([x, y])
-    x = Activation('relu')(x)
+    #x = Activation('relu')(x)
+    x = quant_activation()(x)
 
 
     # Third stack
 
     # Weight layers
     num_filters = 64
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=2,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(x)
-    y = BatchNormalization()(y)
-    y = Activation('relu')(y)
-    y = Conv2D(num_filters,
-                  kernel_size=3,
-                  strides=1,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(y)
-    y = BatchNormalization()(y)
+    y = quant_conv2D(num_filters,3)(x)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=2,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x)
+    #y = BatchNormalization()(y)
+    #y = Activation('relu')(y)
+    y = quant_activation()(y)
+    y = quant_conv2D(num_filters,3)(y)
+    # y = Conv2D(num_filters,
+    #               kernel_size=3,
+    #               strides=1,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(y)
+    #y = BatchNormalization()(y)
 
     # Adjust for change in dimension due to stride in identity
-    x = Conv2D(num_filters,
-                  kernel_size=1,
-                  strides=2,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))(x)
+    x = quant_conv2D(num_filters,3)(x)
+    # x = Conv2D(num_filters,
+    #               kernel_size=1,
+    #               strides=2,
+    #               padding='same',
+    #               kernel_initializer='he_normal',
+    #               kernel_regularizer=l2(1e-4))(x)
 
     # Overall residual, connect weight layer and identity paths
     x = tf.keras.layers.add([x, y])
-    x = Activation('relu')(x)
-
-
-    # Fourth stack.
-    # While the paper uses four stacks, for cifar10 that leads to a large increase in complexity for minor benefits
-    # Uncomments to use it
-
-#    # Weight layers
-#    num_filters = 128
-#    y = Conv2D(num_filters,
-#                  kernel_size=3,
-#                  strides=2,
-#                  padding='same',
-#                  kernel_initializer='he_normal',
-#                  kernel_regularizer=l2(1e-4))(x)
-#    y = BatchNormalization()(y)
-#    y = Activation('relu')(y)
-#    y = Conv2D(num_filters,
-#                  kernel_size=3,
-#                  strides=1,
-#                  padding='same',
-#                  kernel_initializer='he_normal',
-#                  kernel_regularizer=l2(1e-4))(y)
-#    y = BatchNormalization()(y)
-#
-#    # Adjust for change in dimension due to stride in identity
-#    x = Conv2D(num_filters,
-#                  kernel_size=1,
-#                  strides=2,
-#                  padding='same',
-#                  kernel_initializer='he_normal',
-#                  kernel_regularizer=l2(1e-4))(x)
-#
-#    # Overall residual, connect weight layer and identity paths
-#    x = tf.keras.layers.add([x, y])
-#    x = Activation('relu')(x)
-
+    #x = Activation('relu')(x)
+    x = quant_activation()(x)
 
     # Final classification layer.
+    # Do not need to quantize Average pooling layer
     pool_size = int(np.amin(x.shape[1:3]))
     x = AveragePooling2D(pool_size=pool_size)(x)
-    y = Flatten()(x)
-    outputs = Dense(num_classes,
-                    activation='softmax',
-                    kernel_initializer='he_normal')(y)
 
+    # Do not need to quantize flatten layer
+    y = Flatten()(x)
+
+    # Add fully connected layer
+    # outputs = Dense(num_classes,
+    #                 activation='softmax',
+    #                 kernel_initializer='he_normal')(y)
+
+    outputs = quant_dense(num_classes)(y)
+    outputs = Activation('softmax')(outputs)
     # Instantiate model.
     model = Model(inputs=inputs, outputs=outputs)
+
+    # configure model
+    # for layer in model.layers:
+    #     if layer.name in ['Quantization', 'Dequantization']:
+    #         layer.trainable = False
+
     return model
