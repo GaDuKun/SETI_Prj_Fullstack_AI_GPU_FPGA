@@ -171,5 +171,5 @@ if __name__ == "__main__":
     plt.plot(np.array(range(EPOCHS)), History.history['loss'])
     plt.plot(np.array(range(EPOCHS)), History.history['accuracy'])
     plt.savefig('train_loss_acc.png')
-    model_name = "trainedResnet.h5"
+    model_name = "trainedResnet_aware.h5"
     new_model.save("trained_models/" + model_name)
